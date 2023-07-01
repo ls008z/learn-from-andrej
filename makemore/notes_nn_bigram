@@ -1,0 +1,98 @@
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+
+g = torch.Generator().manual_seed(2147483647)
+
+data_path = "/Users/leos/LearnCS/learn-from-andrej/makemore/names.txt"
+
+words = open(data_path, "r").read().splitlines()
+
+chars = sorted(list(set("".join(words))))
+
+stoi = {s: i + 1 for i, s in enumerate(chars)}
+stoi["."] = 0
+
+itos = {i: s for s, i in stoi.items()}
+
+
+# ========================
+# create the training data
+# ========================
+
+xs, ys = [], []
+
+for w in words:
+    chs = ["."] + list(w) + ["."]
+    # print(chs)
+    for ch1, ch2 in zip(chs, chs[1:]):
+        ix1 = stoi[ch1]
+        ix2 = stoi[ch2]
+        # print(ch1, ch2, ix1, ix2)
+        xs.append(ix1)
+        ys.append(ix2)
+
+xs = torch.tensor(xs, dtype=torch.int64)
+ys = torch.tensor(ys, dtype=torch.int64)
+
+# one-hot encode the training data
+xenc = F.one_hot(xs, num_classes=len(chars) + 1).float()
+
+# ========================
+# create the model
+# ========================
+
+W = torch.randn((len(chars) + 1, len(chars) + 1), requires_grad=True)
+
+
+# gradiente descent
+for k in range(100):
+    # ========================
+    # forwards pass
+    # ========================
+
+    # xenc.dtype
+    # plt.imshow(xenc, cmap="Blues")
+    # plt.show()
+    logits = xenc @ W
+    # below is called the softmax function
+    counts = logits.exp()
+    probs = counts / counts.sum(dim=1, keepdim=True)
+
+    # plt.imshow(prob.detach(), cmap="Blues")
+
+    # ========================
+    # compute the loss
+    # ========================
+    # the loss is the negative log likelihood
+    predicted_probs = probs[torch.arange(len(xs)), ys]
+    loss = (
+        -torch.log(predicted_probs).mean() + W.pow(2).sum() * 0.001
+    )  # L2 regularization
+    print(loss.item())
+    # ========================
+    # backwards pass
+    # ========================
+    W.grad = None  # clear the gradient
+    loss.backward()
+
+    # ========================
+    # update the parameters
+    # ========================
+    W.data -= 50 * W.grad.data
+
+
+# ========================
+# sample from the model
+# ========================
+ix = 0
+while True:
+    xenc = F.one_hot(torch.tensor([ix]), num_classes=len(chars) + 1).float()
+    logits = xenc @ W
+    counts = logits.exp()
+    probs = counts / counts.sum(dim=1, keepdim=True)
+    ix = torch.multinomial(probs, num_samples=1, generator=g, replacement=True).item()
+    ch = itos[ix]
+    if ch == ".":
+        break
+    print(ch, end="")

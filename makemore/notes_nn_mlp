@@ -1,0 +1,223 @@
+import random
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+
+g = torch.Generator().manual_seed(12345)
+
+data_path = "/Users/leos/LearnCS/learn-from-andrej/makemore/names.txt"
+
+words = open(data_path, "r").read().splitlines()
+
+chars = sorted(list(set("".join(words))))
+
+stoi = {s: i + 1 for i, s in enumerate(chars)}
+stoi["."] = 0
+itos = {i: s for s, i in stoi.items()}
+
+# ========================
+# create the training data
+# ========================
+
+block_size = 3  # 3 characters
+X, Y = [], []
+
+for w in words:
+    # print(w)
+    context = [0] * block_size
+    for ch in w + ".":
+        ix = stoi[ch]
+        X.append(context)
+        Y.append(ix)
+        # print("".join(itos[i] for i in context), "->", ch)
+        context = context[1:] + [ix]  # shift the context by one character
+
+X = torch.tensor(X, dtype=torch.int64)
+Y = torch.tensor(Y, dtype=torch.int64)
+
+# ========================
+# Enbedding
+# ========================
+
+embed_size = 2
+
+# Instead of one-hot encoding, we now encode
+# each character with a vector of size embed_size
+
+C = torch.randn((len(chars) + 1, embed_size))
+
+# Recall that X is of shape (N, block_size)
+# Where N is the number of training examples
+# we can encode all the characters in X at once
+# Xenc = C[X]  # shape (N, block_size, embed_size )
+
+# Note that C is considered parameters of the model
+# and will be updated during training
+
+# ========================
+# create the model
+# ========================
+
+W1 = torch.randn((embed_size * block_size, 100), generator=g)
+b1 = torch.randn((100,), generator=g)
+
+W2 = torch.randn((100, len(chars) + 1), generator=g)
+b2 = torch.randn((len(chars) + 1,), generator=g)
+
+parameters = [C, W1, b1, W2, b2]
+for p in parameters:
+    p.requires_grad = True
+
+# ========================
+# forwards pass
+# ========================
+
+# for matrix multiplication, we need to flatten Xenc
+# to shape (N, embed_size * block_size)
+# Recall each character is encoded as a vector of size embed_size
+# and we have block_size characters per training example
+
+# here is an example on how view works
+# this method of reshaping is efficient because it does not
+# copy the data, it just changes the shape
+# x = torch.arange(18)
+# print(x)
+# print(x.view(3, 3, 2))
+
+
+h = (C[X].view(-1, embed_size * block_size) @ W1 + b1).tanh()
+# note that there's some broadcasting going on here
+# the first term is of shape (N, 100)
+# where 100 is the number of neurons in the layer
+# and b1 is treated as (1, 100) and broadcasted to (N, 100)
+# i.e. we are adding b1 as row vector to each row
+
+logits = h @ W2 + b2
+counts = logits.exp()
+probs = counts / counts.sum(dim=1, keepdim=True)
+
+# ========================
+# compute the loss
+# ========================
+
+# you can indexing tensors with other tensors
+# this is called "fancy indexing"
+# below we are using the fact that Y is of shape (N,)
+# and indexing into probs with Y will give us the
+# probabilities of the correct characters
+# this is a neat trick to compute the loss
+# without using a for loop
+
+# loss = -torch.log(probs[torch.arange(len(Y)), Y]).mean()
+
+
+# or you could just use the cross entropy loss function
+# it won't give inf when you have large logits
+# by using doing normalization
+# recall the shape of logits is (N, len(chars) + 1)
+# and the shape of Y is (N,)
+loss = F.cross_entropy(logits, Y)
+print(loss)
+
+
+# ========================
+# backwards pass
+# ========================
+
+for p in parameters:
+    p.grad = None
+
+loss.backward()
+
+# ========================
+# update the parameters
+# ========================
+
+# try to find good learning rate
+lre = torch.linspace(-3, 0, 1000)
+lrs = 10**lre
+
+
+lri = []
+lossi = []
+batch_size = 500
+for i in range(10000):
+    # compute the forwards pass
+    # Forward pass should use all parameters
+    # Privously you used Xenc here, but you should use C[X]
+    # Because C is a parameter of the model
+
+    # Do each iteration using only one batch
+    ix = torch.randint(low=0, high=len(X), size=(batch_size,), generator=g)
+
+    # recall X has shape (N, block_size)
+    h = (C[X[ix]].view(-1, embed_size * block_size) @ W1 + b1).tanh()
+    logits = h @ W2 + b2
+    loss = F.cross_entropy(logits, Y[ix])
+
+    print(loss.item())
+    for p in parameters:
+        p.grad = None
+
+    loss.backward()
+
+    # update the parameters
+    # lr = lrs[i]
+    for p in parameters:
+        p.data -= 0.0001 * p.grad
+
+    # lri.append(lre[i])
+    # lossi.append(loss.item())
+
+
+# plt.plot(lri, lossi)
+
+# ========================
+# evaluate all losses
+# ========================
+
+Xenc = C[X]
+h = (Xenc.view(-1, embed_size * block_size) @ W1 + b1).tanh()
+logits = h @ W2 + b2
+loss = F.cross_entropy(logits, Y)
+print(loss)
+
+print("number of parameters:", sum(p.nelement() for p in parameters))
+
+
+# ========================
+# Train Validation Test Split
+# ========================
+
+# split the data into train, validation and test sets
+# we will use the validation set to tune the hyperparameters
+# and the test set to evaluate the final model
+
+# 80% train, 10% validation, 10% test
+
+
+def build_dataset(words):
+    block_size = 3  # 3 characters
+    X, Y = [], []
+    for w in words:
+        context = [0] * block_size
+        for ch in w + ".":
+            ix = stoi[ch]
+            X.append(context)
+            Y.append(ix)
+            context = context[1:] + [ix]
+    X = torch.tensor(X, dtype=torch.int64)
+    Y = torch.tensor(Y, dtype=torch.int64)
+
+    print(X.shape, Y.shape)
+    return X, Y
+
+
+random.seed(42)
+random.shuffle(words)
+n1 = int(len(words) * 0.8)
+n2 = int(len(words) * 0.9)
+
+Xtrain, Ytrain = build_dataset(words[:n1])
+Xval, Yval = build_dataset(words[n1:n2])
+Xtest, Ytest = build_dataset(words[n2:])
